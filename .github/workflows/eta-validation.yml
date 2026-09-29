@@ -1,0 +1,71 @@
+name: ETA validation
+
+on:
+  push:
+    paths:
+      - ".github/workflows/eta-validation.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sample twice and compare
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error "https://bus117-api.vercel.app/api/bus117" -o sample1.json
+          sleep 30
+          curl --fail --silent --show-error "https://bus117-api.vercel.app/api/bus117" -o sample2.json
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          a=json.loads(Path("sample1.json").read_text(encoding="utf-8"))
+          b=json.loads(Path("sample2.json").read_text(encoding="utf-8"))
+
+          out={
+            "sample1_time":a.get("업데이트시간"),
+            "sample2_time":b.get("업데이트시간"),
+            "elapsed_seconds":30,
+            "stops":{}
+          }
+
+          for stop in ["월드컵경기장역","수정초등학교"]:
+            arr1=(a.get("정류장",{}).get(stop,{}).get("도착") or [])
+            arr2=(b.get("정류장",{}).get(stop,{}).get("도착") or [])
+            if not arr1 or not arr2:
+              out["stops"][stop]={"comparable":False}
+              continue
+            eta1=arr1[0].get("도착초")
+            eta2=arr2[0].get("도착초")
+            predicted=max((eta1 or 0)-30,0)
+            error=None if eta2 is None else eta2-predicted
+            out["stops"][stop]={
+              "comparable":True,
+              "sample1_eta_seconds":eta1,
+              "predicted_after_30s":predicted,
+              "sample2_actual_eta_seconds":eta2,
+              "error_seconds_actual_minus_predicted":error,
+              "sample1_remaining_stops":arr1[0].get("남은정류장"),
+              "sample2_remaining_stops":arr2[0].get("남은정류장")
+            }
+
+          Path("eta_validation.json").write_text(
+            json.dumps(out,ensure_ascii=False,indent=2)+"\n",
+            encoding="utf-8"
+          )
+          PY
+
+      - name: Commit result
+        run: |
+          git config user.name "bus117-bot"
+          git config user.email "bus117-bot@users.noreply.github.com"
+          git add eta_validation.json
+          git commit -m "Add ETA validation result" || exit 0
+          git push
