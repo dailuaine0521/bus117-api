@@ -10,33 +10,42 @@ app = Flask(__name__)
 
 CITY_CODE = "25"
 ROUTE_NO = "117"
-TARGET_DIRECTION = "한밭대학교"
+TARGET_DIRECTION = "수통골입구 방향"
 
 TAGO_ARRIVAL_URL = (
     "https://apis.data.go.kr/1613000/ArvlInfoInqireService/"
     "getSttnAcctoArvlPrearngeInfoList"
 )
 
-# 한밭대학교 방향 정류장
+# 사용자가 실제로 타는 방향:
+# 월드컵경기장역(42220) -> 수정초등학교(46070)
+# -> 운암네오미아/신협연수원(41750) -> 삼성화재연수원(41710)
+# -> 한밭대학교(41680) -> 수통골입구(45760)
 STOPS = {
     "월드컵경기장역": {
-        "stop_no": "42250",
-        "node_id": "DJB8002375",
+        "stop_no": "42220",
+        "node_id": "DJB8002376",
     },
     "수정초등학교": {
-        "stop_no": "46080",
-        "node_id": "DJB8070044",
+        "stop_no": "46070",
+        "node_id": "DJB8070043",
     },
 }
+
+ROUTE_SEQUENCE = [
+    {"name": "월드컵경기장역", "stop_no": "42220"},
+    {"name": "수정초등학교", "stop_no": "46070"},
+    {"name": "운암네오미아/신협연수원", "stop_no": "41750"},
+    {"name": "삼성화재연수원", "stop_no": "41710"},
+    {"name": "한밭대학교", "stop_no": "41680"},
+    {"name": "수통골입구", "stop_no": "45760"},
+]
 
 
 def get_service_key():
     key = os.getenv("BUS_API_SERVICE_KEY")
     if not key:
         raise RuntimeError("BUS_API_SERVICE_KEY 환경변수가 설정되지 않았습니다.")
-
-    # 공공데이터포털에서 Encoding 키를 넣어도 requests가 다시 인코딩하지 않도록
-    # 한 번 디코딩하여 사용한다. Decoding 키라면 그대로 유지된다.
     return unquote(key.strip())
 
 
@@ -102,7 +111,6 @@ def fetch_arrivals(stop_name, stop):
         except (TypeError, ValueError):
             remaining_stops = None
 
-        # 0초는 의미 없는 값일 수 있으므로 분 계산 시 0으로 유지
         arrival_minutes = (seconds + 59) // 60 if seconds > 0 else 0
 
         arrivals.append({
@@ -165,6 +173,7 @@ def bus117():
         "route": ROUTE_NO,
         "direction": TARGET_DIRECTION,
         "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "route_sequence": ROUTE_SEQUENCE,
         "stops": results,
     })
 
