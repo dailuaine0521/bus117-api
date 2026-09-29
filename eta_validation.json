@@ -1,0 +1,25 @@
+{
+  "sample1_time": "2026-09-29 16:47:54",
+  "sample2_time": "2026-09-29 16:50:45",
+  "elapsed_seconds": 30,
+  "stops": {
+    "월드컵경기장역": {
+      "comparable": true,
+      "sample1_eta_seconds": 93,
+      "predicted_after_30s": 63,
+      "sample2_actual_eta_seconds": 1116,
+      "error_seconds_actual_minus_predicted": 1053,
+      "sample1_remaining_stops": 1,
+      "sample2_remaining_stops": 11
+    },
+    "수정초등학교": {
+      "comparable": true,
+      "sample1_eta_seconds": 214,
+      "predicted_after_30s": 184,
+      "sample2_actual_eta_seconds": 89,
+      "error_seconds_actual_minus_predicted": -95,
+      "sample1_remaining_stops": 2,
+      "sample2_remaining_stops": 1
+    }
+  }
+}
