@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import requests
@@ -11,10 +12,21 @@ CITY_CODE = "25"
 ROUTE_NO = "117"
 TARGET_DIRECTION = "한밭대학교"
 
-# 공개 정류장 번호(사용자 확인용)
+TAGO_ARRIVAL_URL = (
+    "https://apis.data.go.kr/1613000/ArvlInfoInqireService/"
+    "getSttnAcctoArvlPrearngeInfoList"
+)
+
+# 한밭대학교 방향 정류장
 STOPS = {
-    "월드컵경기장역": "42250",
-    "수정초등학교": "46080",
+    "월드컵경기장역": {
+        "stop_no": "42250",
+        "node_id": "DJB8002375",
+    },
+    "수정초등학교": {
+        "stop_no": "46080",
+        "node_id": "DJB8070044",
+    },
 }
 
 
@@ -22,7 +34,93 @@ def get_service_key():
     key = os.getenv("BUS_API_SERVICE_KEY")
     if not key:
         raise RuntimeError("BUS_API_SERVICE_KEY 환경변수가 설정되지 않았습니다.")
-    return key
+
+    # 공공데이터포털에서 Encoding 키를 넣어도 requests가 다시 인코딩하지 않도록
+    # 한 번 디코딩하여 사용한다. Decoding 키라면 그대로 유지된다.
+    return unquote(key.strip())
+
+
+def normalize_items(data):
+    try:
+        items = data["response"]["body"]["items"]["item"]
+    except (KeyError, TypeError):
+        return []
+
+    if isinstance(items, dict):
+        return [items]
+    if isinstance(items, list):
+        return items
+    return []
+
+
+def fetch_arrivals(stop_name, stop):
+    params = {
+        "serviceKey": get_service_key(),
+        "pageNo": 1,
+        "numOfRows": 50,
+        "_type": "json",
+        "cityCode": CITY_CODE,
+        "nodeId": stop["node_id"],
+    }
+
+    response = requests.get(TAGO_ARRIVAL_URL, params=params, timeout=8)
+
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"TAGO HTTP {response.status_code}: {response.text[:200]}"
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        raise RuntimeError(
+            "TAGO가 JSON이 아닌 응답을 반환했습니다: "
+            + response.text[:300]
+        )
+
+    header = data.get("response", {}).get("header", {})
+    result_code = str(header.get("resultCode", ""))
+
+    if result_code and result_code not in ("00", "0"):
+        raise RuntimeError(
+            f"TAGO 오류 {result_code}: {header.get('resultMsg', '알 수 없는 오류')}"
+        )
+
+    arrivals = []
+
+    for item in normalize_items(data):
+        if str(item.get("routeno", "")).strip() != ROUTE_NO:
+            continue
+
+        try:
+            seconds = int(item.get("arrtime", 0))
+        except (TypeError, ValueError):
+            seconds = 0
+
+        try:
+            remaining_stops = int(item.get("arrprevstationcnt", 0))
+        except (TypeError, ValueError):
+            remaining_stops = None
+
+        # 0초는 의미 없는 값일 수 있으므로 분 계산 시 0으로 유지
+        arrival_minutes = (seconds + 59) // 60 if seconds > 0 else 0
+
+        arrivals.append({
+            "arrival_seconds": seconds,
+            "arrival_minutes": arrival_minutes,
+            "remaining_stops": remaining_stops,
+            "vehicle_type": item.get("vehicletp"),
+            "route_id": item.get("routeid"),
+        })
+
+    arrivals.sort(key=lambda x: x["arrival_seconds"])
+
+    return {
+        "name": stop_name,
+        "stop_no": stop["stop_no"],
+        "node_id": stop["node_id"],
+        "arrivals": arrivals[:2],
+    }
 
 
 @app.route("/")
@@ -30,33 +128,44 @@ def root():
     return jsonify({
         "ok": True,
         "service": "bus117-api",
-        "message": "대전 117번 버스 조회 API",
+        "message": "대전 117번 버스 실시간 도착정보 API",
         "endpoint": "/api/bus117",
     })
 
 
 @app.route("/api/bus117")
 def bus117():
-    # 1단계: 환경변수 연결 확인용.
-    # 다음 단계에서 TAGO의 실제 nodeId / routeId를 조회하여
-    # 실시간 도착정보를 붙인다.
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+
     try:
-        get_service_key()
+        results = {
+            name: fetch_arrivals(name, stop)
+            for name, stop in STOPS.items()
+        }
     except RuntimeError as e:
         return jsonify({
             "ok": False,
+            "route": ROUTE_NO,
+            "direction": TARGET_DIRECTION,
+            "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "error": str(e),
-        }), 500
-
-    now = datetime.now(ZoneInfo("Asia/Seoul"))
+        }), 502
+    except requests.RequestException as e:
+        return jsonify({
+            "ok": False,
+            "route": ROUTE_NO,
+            "direction": TARGET_DIRECTION,
+            "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": f"TAGO 요청 실패: {e}",
+        }), 502
 
     return jsonify({
         "ok": True,
+        "source": "국토교통부 TAGO 버스도착정보",
         "route": ROUTE_NO,
         "direction": TARGET_DIRECTION,
         "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "message": "환경변수가 정상적으로 연결되었습니다. 다음 단계에서 실시간 TAGO 조회를 연결합니다.",
-        "stops": STOPS,
+        "stops": results,
     })
 
 
