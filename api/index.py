@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 from datetime import datetime
@@ -5,7 +6,7 @@ from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, request
 
 app = Flask(__name__)
 app.json.ensure_ascii = False
@@ -19,10 +20,10 @@ TAGO_ARRIVAL_URL = (
     "getSttnAcctoArvlPrearngeInfoList"
 )
 
-# 사용자가 실제로 타는 방향:
-# 월드컵경기장역(42220) -> 수정초등학교(46070)
-# -> 운암네오미아/신협연수원(41750) -> 삼성화재연수원(41710)
-# -> 한밭대학교(41680) -> 수통골입구(45760)
+GITHUB_REPO = "dailuaine0521/bus117-api"
+GITHUB_FILE = "latest.json"
+GITHUB_BRANCH = "main"
+
 STOPS = {
     "월드컵경기장역": {
         "stop_no": "42220",
@@ -83,11 +84,7 @@ def fetch_arrivals(stop_name, stop):
     }
 
     response = requests.get(TAGO_ARRIVAL_URL, params=params, timeout=8)
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            f"TAGO HTTP {response.status_code}: {response.text[:200]}"
-        )
+    response.raise_for_status()
 
     try:
         data = response.json()
@@ -121,10 +118,7 @@ def fetch_arrivals(stop_name, stop):
         except (TypeError, ValueError):
             remaining_stops = None
 
-        arrival_minutes = (seconds + 59) // 60 if seconds > 0 else 0
-
         arrivals.append({
-            "도착분": arrival_minutes,
             "도착초": seconds,
             "남은정류장": remaining_stops,
             "차량유형": item.get("vehicletp"),
@@ -141,51 +135,137 @@ def fetch_arrivals(stop_name, stop):
     }
 
 
-@app.route("/")
-def root():
-    return pretty_json({
-        "ok": True,
-        "서비스": "bus117-api",
-        "message": "대전 117번 버스 실시간 도착정보 API",
-        "엔드포인트": "/api/bus117",
-    })
-
-
-@app.route("/api/bus117")
-def bus117():
+def build_snapshot():
     now = datetime.now(ZoneInfo("Asia/Seoul"))
 
-    try:
-        results = {
-            name: fetch_arrivals(name, stop)
-            for name, stop in STOPS.items()
-        }
-    except RuntimeError as e:
-        return pretty_json({
-            "ok": False,
-            "route": ROUTE_NO,
-            "direction": TARGET_DIRECTION,
-            "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "error": str(e),
-        }, 502)
-    except requests.RequestException as e:
-        return pretty_json({
-            "ok": False,
-            "route": ROUTE_NO,
-            "direction": TARGET_DIRECTION,
-            "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "error": f"TAGO 요청 실패: {e}",
-        }, 502)
+    results = {
+        name: fetch_arrivals(name, stop)
+        for name, stop in STOPS.items()
+    }
 
-    return pretty_json({
+    initialized = all(
+        len(results[name]["도착"]) > 0
+        for name in STOPS
+    )
+
+    snapshot = {
         "ok": True,
+        "초기화완료": initialized,
         "route": ROUTE_NO,
         "direction": TARGET_DIRECTION,
         "source": "국토교통부 TAGO 버스도착정보",
         "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
         "노선순서": ROUTE_SEQUENCE,
         "정류장": results,
+    }
+
+    if not initialized:
+        snapshot["message"] = "실시간 정보 초기화 중"
+
+    return snapshot
+
+
+def save_snapshot_to_github(snapshot):
+    token = os.getenv("GITHUB_TOKEN")
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN 환경변수가 설정되지 않았습니다.")
+
+    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    sha = None
+    current = requests.get(
+        api_url,
+        headers=headers,
+        params={"ref": GITHUB_BRANCH},
+        timeout=8,
+    )
+    if current.status_code == 200:
+        sha = current.json().get("sha")
+    elif current.status_code != 404:
+        raise RuntimeError(
+            f"GitHub 조회 실패 {current.status_code}: {current.text[:200]}"
+        )
+
+    encoded = base64.b64encode(
+        json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
+    ).decode("ascii")
+
+    payload = {
+        "message": f"Update bus snapshot {snapshot['업데이트시간']}",
+        "content": encoded,
+        "branch": GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    saved = requests.put(
+        api_url,
+        headers=headers,
+        json=payload,
+        timeout=8,
+    )
+    if saved.status_code not in (200, 201):
+        raise RuntimeError(
+            f"GitHub 저장 실패 {saved.status_code}: {saved.text[:300]}"
+        )
+
+
+def cron_authorized():
+    secret = os.getenv("CRON_SECRET")
+    if not secret:
+        return True
+    return request.headers.get("Authorization") == f"Bearer {secret}"
+
+
+@app.route("/")
+def root():
+    return pretty_json({
+        "ok": True,
+        "서비스": "bus117-api",
+        "message": "대전 117번 버스 실시간 도착정보 API",
+        "엔드포인트": ["/api/bus117", "/api/snapshot"],
     })
+
+
+@app.route("/api/bus117")
+def bus117():
+    try:
+        return pretty_json(build_snapshot())
+    except Exception as e:
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
+        return pretty_json({
+            "ok": False,
+            "초기화완료": False,
+            "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "error": str(e),
+        }, 502)
+
+
+@app.route("/api/snapshot")
+def snapshot():
+    if not cron_authorized():
+        return pretty_json({"ok": False, "error": "unauthorized"}, 401)
+
+    try:
+        data = build_snapshot()
+        save_snapshot_to_github(data)
+        return pretty_json({
+            "ok": True,
+            "초기화완료": data["초기화완료"],
+            "업데이트시간": data["업데이트시간"],
+            "saved": GITHUB_FILE,
+        })
+    except Exception as e:
+        return pretty_json({
+            "ok": False,
+            "초기화완료": False,
+            "error": str(e),
+        }, 502)
 
 
 @app.route("/api/health")
