@@ -1,12 +1,14 @@
+import json
 import os
 from datetime import datetime
 from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, jsonify
+from flask import Flask, Response, jsonify
 
 app = Flask(__name__)
+app.json.ensure_ascii = False
 
 CITY_CODE = "25"
 ROUTE_NO = "117"
@@ -40,6 +42,14 @@ ROUTE_SEQUENCE = [
     {"name": "한밭대학교", "stop_no": "41680"},
     {"name": "수통골입구", "stop_no": "45760"},
 ]
+
+
+def pretty_json(payload, status=200):
+    return Response(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        status=status,
+        mimetype="application/json",
+    )
 
 
 def get_service_key():
@@ -114,30 +124,30 @@ def fetch_arrivals(stop_name, stop):
         arrival_minutes = (seconds + 59) // 60 if seconds > 0 else 0
 
         arrivals.append({
-            "arrival_seconds": seconds,
-            "arrival_minutes": arrival_minutes,
-            "remaining_stops": remaining_stops,
-            "vehicle_type": item.get("vehicletp"),
-            "route_id": item.get("routeid"),
+            "도착분": arrival_minutes,
+            "도착초": seconds,
+            "남은정류장": remaining_stops,
+            "차량유형": item.get("vehicletp"),
+            "경로ID": item.get("routeid"),
         })
 
-    arrivals.sort(key=lambda x: x["arrival_seconds"])
+    arrivals.sort(key=lambda x: x["도착초"])
 
     return {
-        "name": stop_name,
-        "stop_no": stop["stop_no"],
-        "node_id": stop["node_id"],
-        "arrivals": arrivals[:2],
+        "이름": stop_name,
+        "정류장번호": stop["stop_no"],
+        "노드ID": stop["node_id"],
+        "도착": arrivals[:2],
     }
 
 
 @app.route("/")
 def root():
-    return jsonify({
+    return pretty_json({
         "ok": True,
-        "service": "bus117-api",
+        "서비스": "bus117-api",
         "message": "대전 117번 버스 실시간 도착정보 API",
-        "endpoint": "/api/bus117",
+        "엔드포인트": "/api/bus117",
     })
 
 
@@ -151,33 +161,33 @@ def bus117():
             for name, stop in STOPS.items()
         }
     except RuntimeError as e:
-        return jsonify({
+        return pretty_json({
             "ok": False,
             "route": ROUTE_NO,
             "direction": TARGET_DIRECTION,
-            "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
             "error": str(e),
-        }), 502
+        }, 502)
     except requests.RequestException as e:
-        return jsonify({
+        return pretty_json({
             "ok": False,
             "route": ROUTE_NO,
             "direction": TARGET_DIRECTION,
-            "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
             "error": f"TAGO 요청 실패: {e}",
-        }), 502
+        }, 502)
 
-    return jsonify({
+    return pretty_json({
         "ok": True,
-        "source": "국토교통부 TAGO 버스도착정보",
         "route": ROUTE_NO,
         "direction": TARGET_DIRECTION,
-        "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "route_sequence": ROUTE_SEQUENCE,
-        "stops": results,
+        "source": "국토교통부 TAGO 버스도착정보",
+        "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "노선순서": ROUTE_SEQUENCE,
+        "정류장": results,
     })
 
 
 @app.route("/api/health")
 def health():
-    return jsonify({"ok": True})
+    return pretty_json({"ok": True})
