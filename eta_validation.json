@@ -1,29 +1,29 @@
 {
-  "sample1_time": "2026-09-29 16:51:53",
-  "sample2_time": "2026-09-29 16:52:17",
+  "sample1_time": "2026-09-29 17:15:55",
+  "sample2_time": "2026-09-29 17:16:17",
   "actual_elapsed_seconds": 20,
   "stops": {
     "월드컵경기장역": {
       "comparable": true,
-      "sample1_eta_seconds": 1011,
+      "sample1_eta_seconds": 784,
       "actual_elapsed_seconds": 20,
-      "predicted_eta_seconds": 991,
-      "sample2_actual_eta_seconds": 1011,
+      "predicted_eta_seconds": 764,
+      "sample2_actual_eta_seconds": 784,
       "error_seconds_actual_minus_predicted": 20,
       "absolute_error_seconds": 20,
-      "sample1_remaining_stops": 10,
-      "sample2_remaining_stops": 10
+      "sample1_remaining_stops": 8,
+      "sample2_remaining_stops": 8
     },
     "수정초등학교": {
       "comparable": true,
-      "sample1_eta_seconds": 1155,
+      "sample1_eta_seconds": 870,
       "actual_elapsed_seconds": 20,
-      "predicted_eta_seconds": 1135,
-      "sample2_actual_eta_seconds": 1155,
+      "predicted_eta_seconds": 850,
+      "sample2_actual_eta_seconds": 870,
       "error_seconds_actual_minus_predicted": 20,
       "absolute_error_seconds": 20,
-      "sample1_remaining_stops": 11,
-      "sample2_remaining_stops": 11
+      "sample1_remaining_stops": 9,
+      "sample2_remaining_stops": 9
     }
   }
 }
