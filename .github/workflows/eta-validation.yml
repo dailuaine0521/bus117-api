@@ -18,21 +18,34 @@ jobs:
       - name: Sample twice and compare
         run: |
           set -euo pipefail
+
+          START1=$(date +%s)
           curl --fail --silent --show-error "https://bus117-api.vercel.app/api/bus117" -o sample1.json
-          sleep 30
+          END1=$(date +%s)
+
+          sleep 20
+
+          START2=$(date +%s)
           curl --fail --silent --show-error "https://bus117-api.vercel.app/api/bus117" -o sample2.json
+          END2=$(date +%s)
+
+          export END1 START2 END2
 
           python - <<'PY'
-          import json
+          import json, os
+          from datetime import datetime
           from pathlib import Path
 
           a=json.loads(Path("sample1.json").read_text(encoding="utf-8"))
           b=json.loads(Path("sample2.json").read_text(encoding="utf-8"))
 
+          # Use actual wall-clock gap between completed first fetch and start of second fetch.
+          elapsed=max(0, int(os.environ["START2"]) - int(os.environ["END1"]))
+
           out={
             "sample1_time":a.get("업데이트시간"),
             "sample2_time":b.get("업데이트시간"),
-            "elapsed_seconds":30,
+            "actual_elapsed_seconds":elapsed,
             "stops":{}
           }
 
@@ -40,20 +53,50 @@ jobs:
             arr1=(a.get("정류장",{}).get(stop,{}).get("도착") or [])
             arr2=(b.get("정류장",{}).get(stop,{}).get("도착") or [])
             if not arr1 or not arr2:
-              out["stops"][stop]={"comparable":False}
+              out["stops"][stop]={"comparable":False,"reason":"도착정보 없음"}
               continue
-            eta1=arr1[0].get("도착초")
-            eta2=arr2[0].get("도착초")
-            predicted=max((eta1 or 0)-30,0)
-            error=None if eta2 is None else eta2-predicted
+
+            x=arr1[0]
+            y=arr2[0]
+            eta1=int(x.get("도착초") or 0)
+            eta2=int(y.get("도착초") or 0)
+            s1=x.get("남은정류장")
+            s2=y.get("남은정류장")
+
+            # If remaining stops increases materially or ETA jumps upward,
+            # the first bus likely passed and the API rolled over to the next bus.
+            same_bus=True
+            reason=""
+            if s1 is not None and s2 is not None and s2 > s1:
+              same_bus=False
+              reason="다음 차량으로 변경됨(남은 정류장 증가)"
+            elif eta2 > eta1 + 120:
+              same_bus=False
+              reason="다음 차량으로 변경 가능성(ETA 급증)"
+
+            if not same_bus:
+              out["stops"][stop]={
+                "comparable":False,
+                "reason":reason,
+                "sample1_eta_seconds":eta1,
+                "sample2_eta_seconds":eta2,
+                "sample1_remaining_stops":s1,
+                "sample2_remaining_stops":s2
+              }
+              continue
+
+            predicted=max(eta1-elapsed,0)
+            error=eta2-predicted
             out["stops"][stop]={
               "comparable":True,
               "sample1_eta_seconds":eta1,
-              "predicted_after_30s":predicted,
+              "actual_elapsed_seconds":elapsed,
+              "predicted_eta_seconds":predicted,
               "sample2_actual_eta_seconds":eta2,
               "error_seconds_actual_minus_predicted":error,
-              "sample1_remaining_stops":arr1[0].get("남은정류장"),
-              "sample2_remaining_stops":arr2[0].get("남은정류장")
+              "absolute_error_seconds":abs(error),
+              "sample1_remaining_stops":s1,
+              "sample2_remaining_stops":s2
             }
 
           Path("eta_validation.json").write_text(
@@ -67,5 +110,5 @@ jobs:
           git config user.name "bus117-bot"
           git config user.email "bus117-bot@users.noreply.github.com"
           git add eta_validation.json
-          git commit -m "Add ETA validation result" || exit 0
+          git commit -m "Update ETA validation result" || exit 0
           git push
