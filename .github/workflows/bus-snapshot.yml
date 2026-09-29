@@ -8,6 +8,7 @@ on:
   push:
     paths:
       - ".github/workflows/bus-snapshot.yml"
+      - "snapshot-trigger.txt"
 
 permissions:
   contents: write
