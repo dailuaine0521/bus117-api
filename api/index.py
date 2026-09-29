@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from datetime import datetime
@@ -6,7 +5,7 @@ from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, Response, request
+from flask import Flask, Response
 
 app = Flask(__name__)
 app.json.ensure_ascii = False
@@ -19,10 +18,6 @@ TAGO_ARRIVAL_URL = (
     "https://apis.data.go.kr/1613000/ArvlInfoInqireService/"
     "getSttnAcctoArvlPrearngeInfoList"
 )
-
-GITHUB_REPO = "dailuaine0521/bus117-api"
-GITHUB_FILE = "latest.json"
-GITHUB_BRANCH = "main"
 
 STOPS = {
     "월드컵경기장역": {
@@ -165,70 +160,13 @@ def build_snapshot():
     return snapshot
 
 
-def save_snapshot_to_github(snapshot):
-    token = os.getenv("GITHUB_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN 환경변수가 설정되지 않았습니다.")
-
-    api_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{GITHUB_FILE}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-
-    sha = None
-    current = requests.get(
-        api_url,
-        headers=headers,
-        params={"ref": GITHUB_BRANCH},
-        timeout=8,
-    )
-    if current.status_code == 200:
-        sha = current.json().get("sha")
-    elif current.status_code != 404:
-        raise RuntimeError(
-            f"GitHub 조회 실패 {current.status_code}: {current.text[:200]}"
-        )
-
-    encoded = base64.b64encode(
-        json.dumps(snapshot, ensure_ascii=False, indent=2).encode("utf-8")
-    ).decode("ascii")
-
-    payload = {
-        "message": f"Update bus snapshot {snapshot['업데이트시간']}",
-        "content": encoded,
-        "branch": GITHUB_BRANCH,
-    }
-    if sha:
-        payload["sha"] = sha
-
-    saved = requests.put(
-        api_url,
-        headers=headers,
-        json=payload,
-        timeout=8,
-    )
-    if saved.status_code not in (200, 201):
-        raise RuntimeError(
-            f"GitHub 저장 실패 {saved.status_code}: {saved.text[:300]}"
-        )
-
-
-def cron_authorized():
-    secret = os.getenv("CRON_SECRET")
-    if not secret:
-        return True
-    return request.headers.get("Authorization") == f"Bearer {secret}"
-
-
 @app.route("/")
 def root():
     return pretty_json({
         "ok": True,
         "서비스": "bus117-api",
         "message": "대전 117번 버스 실시간 도착정보 API",
-        "엔드포인트": ["/api/bus117", "/api/snapshot"],
+        "엔드포인트": ["/api/bus117", "/api/health"],
     })
 
 
@@ -242,28 +180,6 @@ def bus117():
             "ok": False,
             "초기화완료": False,
             "업데이트시간": now.strftime("%Y-%m-%d %H:%M:%S"),
-            "error": str(e),
-        }, 502)
-
-
-@app.route("/api/snapshot")
-def snapshot():
-    if not cron_authorized():
-        return pretty_json({"ok": False, "error": "unauthorized"}, 401)
-
-    try:
-        data = build_snapshot()
-        save_snapshot_to_github(data)
-        return pretty_json({
-            "ok": True,
-            "초기화완료": data["초기화완료"],
-            "업데이트시간": data["업데이트시간"],
-            "saved": GITHUB_FILE,
-        })
-    except Exception as e:
-        return pretty_json({
-            "ok": False,
-            "초기화완료": False,
             "error": str(e),
         }, 502)
 
