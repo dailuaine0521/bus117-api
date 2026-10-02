@@ -3,9 +3,8 @@ name: Bus 117 snapshot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "48 8 * * *"
-    - cron: "52 8 * * *"
-    - cron: "56 8 * * *"
+    # 17:35 KST. Once started, refresh every minute until about 18:05.
+    - cron: "35 8 * * *"
   push:
     paths:
       - ".github/workflows/bus-snapshot.yml"
@@ -21,12 +20,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch live bus data
+      - name: Configure git
+        run: |
+          git config user.name "bus117-bot"
+          git config user.email "bus117-bot@users.noreply.github.com"
+
+      - name: Refresh live snapshot
+        env:
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error             "https://bus117-api.vercel.app/api/bus117"             -o latest.tmp.json
 
-          python - <<'PY'
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            COUNT=30
+          else
+            COUNT=1
+          fi
+
+          for i in $(seq 1 "$COUNT"); do
+            echo "Refresh $i/$COUNT"
+
+            curl --fail --silent --show-error \
+              "https://bus117-api.vercel.app/api/bus117" \
+              -o latest.tmp.json
+
+            python - <<'PY'
           import json
           from pathlib import Path
 
@@ -36,24 +54,23 @@ jobs:
           if not data.get("ok"):
               raise SystemExit("bus API returned ok=false")
 
-          # Save even when initialization is incomplete so ChatGPT can
-          # explicitly report '실시간 정보 초기화 중'.
           Path("latest.json").write_text(
               json.dumps(data, ensure_ascii=False, indent=2) + "\n",
               encoding="utf-8",
           )
           PY
 
-      - name: Commit snapshot
-        run: |
-          git config user.name "bus117-bot"
-          git config user.email "bus117-bot@users.noreply.github.com"
-          git add latest.json
+            git add latest.json
 
-          if git diff --cached --quiet; then
-            echo "No snapshot changes"
-            exit 0
-          fi
+            if git diff --cached --quiet; then
+              echo "No snapshot changes"
+            else
+              git commit -m "Update live bus snapshot"
+              git pull --rebase origin main
+              git push origin main
+            fi
 
-          git commit -m "Update live bus snapshot"
-          git push
+            if [ "$i" -lt "$COUNT" ]; then
+              sleep 60
+            fi
+          done
