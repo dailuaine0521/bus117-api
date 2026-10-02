@@ -3,8 +3,8 @@ name: Bus 117 snapshot
 on:
   workflow_dispatch:
   schedule:
-    # 17:35 KST. Once started, refresh every minute until about 18:05.
-    - cron: "35 8 * * *"
+    # 17:20 KST. Once started, refresh every minute until about 18:10.
+    - cron: "20 8 * * *"
   push:
     paths:
       - ".github/workflows/bus-snapshot.yml"
@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
 
           if [ "$EVENT_NAME" = "schedule" ]; then
-            COUNT=30
+            COUNT=50
           else
             COUNT=1
           fi
