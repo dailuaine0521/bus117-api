@@ -29,7 +29,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           if [ "$EVENT_NAME" = "schedule" ]; then
             COUNT=50
@@ -39,36 +39,61 @@ jobs:
 
           for i in $(seq 1 "$COUNT"); do
             echo "Refresh $i/$COUNT"
+            rm -f latest.tmp.json
 
-            curl --fail --silent --show-error \
+            if curl --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 25 \
+              --retry 3 \
+              --retry-delay 2 \
+              --retry-all-errors \
               "https://bus117-api.vercel.app/api/bus117" \
-              -o latest.tmp.json
+              -o latest.tmp.json; then
 
-            python - <<'PY'
+              if python - <<'PY'
           import json
           from pathlib import Path
 
           p = Path("latest.tmp.json")
-          data = json.loads(p.read_text(encoding="utf-8"))
+          try:
+              data = json.loads(p.read_text(encoding="utf-8"))
+          except Exception as exc:
+              print(f"Invalid API response: {exc}")
+              raise SystemExit(1)
 
           if not data.get("ok"):
-              raise SystemExit("bus API returned ok=false")
+              print("bus API returned ok=false; keeping previous latest.json")
+              raise SystemExit(1)
 
           Path("latest.json").write_text(
               json.dumps(data, ensure_ascii=False, indent=2) + "\n",
               encoding="utf-8",
           )
           PY
+              then
+                git add latest.json
 
-            git add latest.json
-
-            if git diff --cached --quiet; then
-              echo "No snapshot changes"
+                if git diff --cached --quiet; then
+                  echo "No snapshot changes"
+                else
+                  if git commit -m "Update live bus snapshot" &&
+                     git pull --rebase origin main &&
+                     git push origin main; then
+                    echo "Snapshot pushed successfully"
+                  else
+                    echo "::warning::Git update failed on refresh $i; continuing"
+                    git rebase --abort 2>/dev/null || true
+                    git reset --hard origin/main 2>/dev/null || true
+                  fi
+                fi
+              else
+                echo "::warning::Invalid or ok=false API response on refresh $i; keeping previous latest.json and continuing"
+              fi
             else
-              git commit -m "Update live bus snapshot"
-              git pull --rebase origin main
-              git push origin main
+              echo "::warning::Bus API request failed after retries on refresh $i; keeping previous latest.json and continuing"
             fi
+
+            rm -f latest.tmp.json
 
             if [ "$i" -lt "$COUNT" ]; then
               sleep 60
